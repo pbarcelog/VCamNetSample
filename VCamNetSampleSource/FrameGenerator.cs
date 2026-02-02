@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using DirectN;
 using VCamNetSampleSource.Utilities;
 
+
 namespace VCamNetSampleSource
 {
     public class FrameGenerator : IDisposable
@@ -29,6 +30,31 @@ namespace VCamNetSampleSource
 
         public bool HasD3DManager => _texture != null;
         public ulong FrameCount => _frameCount;
+
+        private static void CopyRgbaToWicBitmap_WithSwapRB(
+        IntPtr wicPointer, int wicStride,
+        int w, int h,
+        byte[] rgba, int srcWidth)
+        {
+            int srcStride = srcWidth * 4;
+            int rowBytes = w * 4;
+            var row = new byte[rowBytes];
+
+            for (int y = 0; y < h; y++)
+            {
+                Buffer.BlockCopy(rgba, y * srcStride, row, 0, rowBytes);
+
+                // RGBA -> BGRA (swap R y B)
+                for (int i = 0; i < row.Length; i += 4)
+                {
+                    byte r = row[i + 0];
+                    row[i + 0] = row[i + 2];
+                    row[i + 2] = r;
+                }
+
+                Marshal.Copy(row, 0, IntPtr.Add(wicPointer, y * wicStride), rowBytes);
+            }
+        }
 
         // common to CPU & GPU
         private HRESULT CreateRenderTargetResources(uint width, uint height)
@@ -159,11 +185,13 @@ namespace VCamNetSampleSource
         {
             try
             {
+                Globals.EnsureFakeFramesStarted();
+
                 ArgumentNullException.ThrowIfNull(sample);
                 IComObject<IMFSample>? outSample;
 
                 // render something on image common to CPU & GPU
-                if (_renderTarget != null && _textFormat != null && _dwrite != null && _whiteBrush != null && _blockBrushes != null)
+                if (false && _renderTarget != null && _textFormat != null && _dwrite != null && _whiteBrush != null && _blockBrushes != null)
                 {
                     _renderTarget.BeginDraw();
                     _renderTarget.Clear(new _D3DCOLORVALUE(1, 0, 0, 1));
@@ -233,7 +261,7 @@ namespace VCamNetSampleSource
 
                 //EventProvider.LogInfo("format: " + format + " generated 3D:" + HasD3DManager);
 
-                if (HasD3DManager)
+                if (false && HasD3DManager)
                 {
                     sample.RemoveAllBuffers(); // or create a new one?
 
@@ -262,10 +290,45 @@ namespace VCamNetSampleSource
                 }
 
                 // lock WIC bitmap to write to sample
-                using var locked = _bitmap.Lock(WICBitmapLockFlags.WICBitmapLockRead);
+                using var locked = _bitmap.Lock(WICBitmapLockFlags.WICBitmapLockWrite);
                 locked.Object.GetSize(out var w, out var h).ThrowOnError();
                 locked.Object.GetStride(out var wicStride).ThrowOnError();
                 locked.Object.GetDataPointer(out var wicSize, out var wicPointer).ThrowOnError();
+
+                // DEBUG: rellena el WIC bitmap con rojo sólido para comprobar pipeline
+                unsafe
+                {
+                    byte* p = (byte*)wicPointer;
+                    for (int i = 0; i < (int)wicSize; i += 4)
+                    {
+                        // WIC es BGRA (B,G,R,A)
+                        p[i + 0] = 255;   // B
+                        p[i + 1] = 0;   // G
+                        p[i + 2] = 0; // R
+                        p[i + 3] = 255; // A
+                    }
+                }
+                EventProvider.LogInfo("WIC filled with solid red");
+
+
+                // 1) Si tenemos frame externo, lo copiamos al bitmap WIC (sobrescribe el patrón)
+                if (Globals.Frames.TryGetLatest(out var rgba, out var fw, out var fh, out _))
+                {
+                    int w2 = (int)w;
+                    int h2 = (int)h;
+
+                    // Evita negro por mismatch de resolución
+                    int copyW = Math.Min(fw, w2);
+                    int copyH = Math.Min(fh, h2);
+                    // OJO: WIC es PBGRA, tu frame es RGBA.
+                    // Para MVP, copia tal cual y asume R/B cruzados o arreglamos con swap (ver abajo).
+                    CopyRgbaToWicBitmap_WithSwapRB(
+                        wicPointer, (int)wicStride,
+                        copyW, copyH,
+                        rgba, fw
+                    );
+                }
+
 
                 // if we're on CPU & format is NOT RGB, convert using CPU (CColorConvertDMO)
                 if (format == MFConstants.MFVideoFormat_NV12)
