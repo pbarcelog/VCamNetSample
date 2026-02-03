@@ -68,12 +68,48 @@ namespace VCamNetSampleSource
         public static void RegisterFunction(Type type)
         {
             EventProvider.LogInfo("type:" + type);
+            
+            // Register in Video Input Device Category to make camera visible to Windows
+            const string CLSID_VideoInputDeviceCategory = "{860BB310-5D01-11d0-BD3B-00A0C911CE86}";
+            string clsid = type.GUID.ToString("B").ToUpperInvariant();
+            
+            try
+            {
+                using var categoryKey = Microsoft.Win32.Registry.ClassesRoot.CreateSubKey(
+                    $@"CLSID\{CLSID_VideoInputDeviceCategory}\Instance\{clsid}");
+                
+                if (categoryKey != null)
+                {
+                    categoryKey.SetValue("CLSID", clsid);
+                    categoryKey.SetValue("FriendlyName", "VCam .NET Sample");
+                    EventProvider.LogInfo($"Registered in Video Input Device Category: {clsid}");
+                }
+            }
+            catch (Exception ex)
+            {
+                EventProvider.LogError($"Failed to register category: {ex.Message}");
+            }
         }
 
         [ComUnregisterFunction]
         public static void UnregisterFunction(Type type)
         {
             EventProvider.LogInfo("type:" + type);
+            
+            // Remove from Video Input Device Category
+            const string CLSID_VideoInputDeviceCategory = "{860BB310-5D01-11d0-BD3B-00A0C911CE86}";
+            string clsid = type.GUID.ToString("B").ToUpperInvariant();
+            
+            try
+            {
+                Microsoft.Win32.Registry.ClassesRoot.DeleteSubKey(
+                    $@"CLSID\{CLSID_VideoInputDeviceCategory}\Instance\{clsid}", false);
+                EventProvider.LogInfo($"Unregistered from Video Input Device Category: {clsid}");
+            }
+            catch (Exception ex)
+            {
+                EventProvider.LogError($"Failed to unregister category: {ex.Message}");
+            }
         }
     }
 }
